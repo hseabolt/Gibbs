@@ -17,6 +17,11 @@
 # The MIT License
 #
 # Copyright (c) 2022 Matthew H. Seabolt
+# TO DO:
+# Include a class method to determine the probability of finding a "significant"
+# motif of length *k* by random chance, given the length of the sequences that 
+# are given to the Gibbs object. This is different from an e-value (e.g. Blast) 
+# since that probability is based on the database size.
 #
 # Permission is hereby granted, free of charge, 
 # to any person obtaining a copy of this software and 
@@ -54,7 +59,6 @@ use Storable qw(dclone);
 use Carp;
 our $AUTOLOAD;
 use version; our $VERSION = version->declare("v1.0");
-
 
 
 ################################################################################## 
@@ -420,6 +424,24 @@ sub _check_convergence	{
 	}
 }
 
+# Samples a random set and prints a score
+sub sample_random_starting_positions	{
+	my ( $self, $nsamples ) = @_;
+	my @motifs;
+	foreach my $i ( 1 .. $nsamples )	{
+		my $sample = $self->gibbs_sample();
+		push @motifs, $sample;
+	}
+	my $best_motif =  $self->max_score( \@motifs );
+	return $best_motif;
+}
+		
+# Simply prints an array with each element on a new line		
+sub print_matrix	{
+	my ( $self, $list ) = @_;
+	print STDERR join("\n", @{$list});
+}
+
 # Randomly selects starting positions in each string, disallowing any starting positions
 # that would cause the motif substring to overflow the length of the sequence.
 sub _get_starting_positions		{
@@ -585,6 +607,7 @@ sub _random_choice	{
 	return ( $list->[$idx], $idx );
 }
 
+
 ####################################
 # The actual Gibbs sampling function
 sub _gibbs_sample 		{
@@ -604,6 +627,7 @@ sub _gibbs_sample 		{
 	$self->{_profiles} = [ ];
 
 	my $c = 0;
+
 	while ( $self->_check_convergence != 1 )		{
 		# Generate new lmers that come from starting positions
 		my $tuples;
@@ -616,6 +640,7 @@ sub _gibbs_sample 		{
 		
 		# Choose a sequence from the DNA sequences randomly,
 		# then remove it
+
 		my ( $sequence, $index ) = $self->_random_choice( $self->{_seqs} );
 		splice( @{$self->{_seqs}}, $index, 1);		# Careful here, make sure that we are assigning the spliced list correctly to $self->DNA
 		
@@ -668,8 +693,6 @@ sub _gibbs_sample 		{
 	my $best_motif = $self->_max_score( $self->{_samples} );
 	return $best_motif;		# $best_motif is actually a tuple array of ( STR motif and FLOAT score ), we only want to return the STR motif.
 }
-
-
 
 # Last line in the class must always be 1!
 # We're done!
