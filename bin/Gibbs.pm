@@ -436,12 +436,6 @@ sub sample_random_starting_positions	{
 	return $best_motif;
 }
 		
-# Simply prints an array with each element on a new line		
-sub print_matrix	{
-	my ( $self, $list ) = @_;
-	print STDERR join("\n", @{$list});
-}
-
 # Randomly selects starting positions in each string, disallowing any starting positions
 # that would cause the motif substring to overflow the length of the sequence.
 sub _get_starting_positions		{
