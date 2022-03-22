@@ -1,18 +1,19 @@
-#!/usr/bin/perl
+#!/usr/bin/env perl
 
 # gibbs_sampler_motifs.pl v0.1.0
 # Author: MH Seabolt
-# Last updated: 1-13-2020
+# Last updated: 2022-03-22
 
 # SYNOPSIS:
 # This program just contains example driver code to instantiate a Gibbs sampler object and 
-# pass it some DNA sequences to search for potential motifs of interest.  Extend
-# this program and teach it new tricks however you like :)
+# pass it some DNA sequences to search for potential motifs of interest.  
+# Extend this program and teach it new tricks however you like :)
+
 
 ##################################################################################
 # The MIT License
 #
-# Copyright (c) 2021 Matthew H. Seabolt
+# Copyright (c) 2022 Matthew H. Seabolt
 #
 # Permission is hereby granted, free of charge, 
 # to any person obtaining a copy of this software and 
@@ -52,66 +53,96 @@ my $output = "--";
 my $k;
 my $motif_len;
 my $nsamples;
+my $version;
+my $help;
 
 sub usage {
 	my $usage = "gibbs_sampler_motifs.pl v0.1.0\n
 	PURPOSE: This program just contains example driver code to instantiate a Gibbs sampler object and 
-			pass it some DNA sequences to search for potential motifs of interest. Extend
-			this program and teach it new tricks however you like :)
+		 pass it some DNA sequences to search for potential motifs of interest. 
 			
-	USAGE:	gibbs_sampler_motifs.pl -i sequences.fasta -o motif.profile.tab -k 3 -l 7
+	USAGE:	gibbs_sampler_motifs.pl -i <sequences.fasta> -o <motif.profile.tab> -k <3> -l <7>
 	
 	INPUT/OUTPUT:
-	-i	input sequences in FASTA format (sequences are expected to be the same length, but dont necessarily have to be aligned)
-	-o 	output file name, including extensions
+	-i | --input 		FILE; input sequences in FASTA format (sequences are expected to be the same length, but dont necessarily have to be aligned)
+	-o | --output		STR; output filename
 	
 	SAMPLING PARAMETERS:
-	-k	INT; Number of iterations to check for convergence ( Default: 3 )
-	-l	INT; Length of the motif you want to sample for ( Default: 7 -- minimum value 5 )
-	-n 	INT; Number of replicates to sample from a random starting point ( Default: 100 )
+	-k | --kiter		INT; Number of iterations to check for convergence ( Default: 3 )
+	-l | --len 		INT; Length of the motif you want to sample for ( Default: 7 -- minimum value 5 )
+	-n | --nrepet		INT; Number of replicates to sample from a random starting point ( Default: 100 )
+	
+	OPTIONAL EXTRAS:
+	-v | --version	 	Print version number and exit.
+	-h | --help		Print this help message and exit.
+	
 	\n";
 	print $usage;
 }
 
-GetOptions(	'input|i=s' => \$input,
-			'out|o=s' => \$output,
-			'k=i' => \$k,
-			'len|l=i' => \$motif_len,
+GetOptions(	'input|i=s'  => \$input,
+			'out|o=s'    => \$output,
+			'k|kiter=i'  => \$k,
+			'len|l=i'    => \$motif_len,
 			'nrepet|n=i' => \$nsamples,
+			'version|v'  => \$version,
+			'help|h'     => \$help,
 ) or die usage();
 
-# Parameter Setups
+# Print the version number or the help message and exit if -v or -h is activated
+if ( $version ) 	{ die "gibbs_sampler_motifs.pl v0.1.0\n"; 		}
+if ( $help    )     { die usage();											}
+
+# Sanity check the other user-defined parameters
 $k = ( $k && int($k) >= 2 )? $k : 3;
 $motif_len = ( $motif_len && int($motif_len) >= 5 )? $motif_len : 5;
 $nsamples = ( $nsamples && int($nsamples) >= 1 )? $nsamples : 100;
 
-# Read the sequences into an array
-$/ = ">";
-my $fh = *STDIN;
-my $succin = open(DATA, "<", "$input") if ( $input ne "--" && -e $input );
-$fh = *DATA if ( $succin ); 
-	my @fastas = <$fh>;
-	my $trash = shift @fastas;	# Get rid of the first element, which will be a lone ">" symbol
-close DATA if ( $succin );
-$/ = "\n";
-
-my $DNA = [ ];
-foreach my $record ( @fastas )	{
-	my ($header, @seq) = split "\n", $record;
-	my $sequence = join '', @seq;
-	$sequence =~ s/>//g;						# Remove any lingering ">" symbols
-	push @{$DNA}, uc $sequence;
-}
+# Parse the given FASTA sequences into an array
+my $DNA = read_fasta($input);
 
 # Instantiate a new Gibbs object
-my $Sampler = Gibbs->new( DNA => $DNA, k => $k, motif_len => $motif_len );
-my $best_motif = $Sampler->sample_random_starting_positions( $nsamples );
-print STDERR "\n\nBest motif found: $best_motif->[0]       Score: $best_motif->[1]\n";
+# Note that the array of sequences should be passed as a reference
+my $Sampler = Gibbs->new( seqs => $DNA, k => $k, motif_len => $motif_len );
+
+# Use our Gibbs object to run the MCMC sampling procedure.
+# The returned value is a tuple with the motif sequence and its score.
+my ( $best_motif, $score ) = $Sampler->sample( $nsamples );
+print STDERR "\n\nBest motif found: $best_motif       Score: $score  \n";
 
 # Print the converged profile out if we have an output file specified, otherwise just print to STDOUT
-if ( $output ne "--" )	{	$Sampler->print_profile( $Sampler->{_profiles}->[-1], ">", "$output" );		}
-else 					{	$Sampler->print_profile( $Sampler->{_profiles}->[-1] );						}		# Prints to STDOUT
+if ( $output ne "--" )	{	$Sampler->print_profile( $output, ">" );		}
+else 					{	$Sampler->print_profile();						}		# Prints to STDOUT
 
 
 exit;
 
+############# SUBROUTINES ###################
+
+# This is just an example subroutine to basically parse a FASTA file
+#     and return an array of sequences, which is what we need to create our Gibbs object.
+#     You can create any sort of parsing routines that you like, as long as the end 
+#     result is an array of sequences in the same upper or lower case (preferably upper)
+sub read_fasta 		{
+	my ($input) = @_;
+	
+	# Read the sequences into an array
+	$/ = ">";
+	my $fh = *STDIN;
+	my $succin = open(DATA, "<", "$input") if ( $input ne "--" && -e $input );
+	$fh = *DATA if ( $succin ); 
+		my @fastas = <$fh>;
+		my $trash = shift @fastas;	# Get rid of the first element, which will be a lone ">" symbol
+	close DATA if ( $succin );
+	$/ = "\n";
+
+	my $DNA = [ ];
+	foreach my $record ( @fastas )	{
+		my ($header, @seq) = split "\n", $record;
+		my $sequence = join '', @seq;
+		$sequence =~ s/>//g;						# Remove any lingering ">" symbols
+		push @{$DNA}, uc $sequence;
+	}
+	
+	return $DNA;
+}

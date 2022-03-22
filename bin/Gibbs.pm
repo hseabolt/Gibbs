@@ -1,28 +1,22 @@
-#!/usr/bin/perl
+#!/usr/bin/env perl
 
-# Gibbs.pm v0.1.0
+# Gibbs.pm v1.0
 # Author: MH Seabolt
-# Last updated: 1-13-2020
+# Last updated: 2022-03-22
 
 # SYNOPSIS:
-# A Perl object to instantiate a Gibbs sampler tailored for biological sequence data.
+# A Perl object to instantiate a Gibbs motif sampler tailored for biological sequence data.
 # Constructs an object (the Gibbs sampler) with some data passed to the constructor,
-# which can then be randomly sampled in order to identify potentially interesting 
+# which can then be randomly sampled in order to identify potentially interesting "most mutually similar"
 # sequence motifs.
 
 # Note: some of the methods in this class print output directly to the terminal via STDERR.
 # This can be redirected or captured as desired.
 
-# TO DO:
-# Include a class method to determine the probability of finding a "significant"
-# motif of length *k* by random chance, given the length of the sequences that 
-# are given to the Gibbs object. This is different from an e-value (e.g. Blast) 
-# since that probability is based on the database size.
-
 ##################################################################################
 # The MIT License
 #
-# Copyright (c) 2021 Matthew H. Seabolt
+# Copyright (c) 2022 Matthew H. Seabolt
 #
 # Permission is hereby granted, free of charge, 
 # to any person obtaining a copy of this software and 
@@ -59,6 +53,9 @@ use Scalar::Util;
 use Storable qw(dclone);
 use Carp;
 our $AUTOLOAD;
+use version; our $VERSION = version->declare("v1.0");
+
+
 
 ################################################################################## 
 
@@ -68,7 +65,7 @@ our $AUTOLOAD;
 	# _states and _adj are inherited from Markov parent class
 	my %_attribute_properties = (
 		_k						=> 3,					# the number of iterations for which nothing changing will be considered convergence, Default 3
-		_DNA					=> [ ],					# an anon array containing all the DNA sequences we are searching/sampling from
+		_seqs					=> [ ],					# an anon array containing all the DNA sequences we are searching/sampling from
 		_motif_len				=> 7,					# the length of the motif we are searching for, Default 7
 		_alphabet				=> '',					# the set of possible symbols available
 		_samples				=> [ ],					# a list of the samples we pull, will be updated each iteration
@@ -129,12 +126,12 @@ sub new				{
    	}
 	
 	# Confirm that the DNA attribute exists, then check all sequences are the same length
-	if ( not $self->{_DNA} )	{
+	if ( not $self->{_seqs} )	{
 		warn "Gibbs->new() WARNING: DNA attribute does not exist!\n";
 		return;
 	}
 	
-	my $all_same_flag = $self->all_the_same_length( $self->{_DNA} );
+	my $all_same_flag = $self->_all_the_same_length( $self->{_seqs} );
 	if ( $all_same_flag == 0 )	{
 		warn "Gibbs->new() WARNING: DNA sequences are not all the same length!\n";
 		return;
@@ -142,7 +139,7 @@ sub new				{
 	
 	# Set the alphabet set of characters
 	my %Uniques;
-	foreach my $sequence ( @{ $self->{_DNA} } )	{
+	foreach my $sequence ( @{ $self->{_seqs} } )	{
 		my @seq = split('', $sequence);
 		$Uniques{$_} = 1 foreach ( @seq );
 	}
@@ -150,8 +147,8 @@ sub new				{
 	$self->{_alphabet} = \@alphabet;
 	
 	# Set t and n
-	$self->{_t} = scalar @{$self->{_DNA}};
-	$self->{_n} = length $self->{_DNA}->[0];
+	$self->{_t} = scalar @{$self->{_seqs}};
+	$self->{_n} = length $self->{_seqs}->[0];
 	
 	# All other attributes should have default values set which will at least allow us to run
 	
@@ -232,15 +229,135 @@ sub AUTOLOAD {
     return $self->{$attribute};
 }
 
+# When an object is no longer being used, garbage collect it and adjust count of existing objects
+sub DESTROY	{
+	my ( $self ) = @_;
+	$self->_decr_count();
+}
+
 ############################################################
-#                BASIC UTILITY SUBROUTINES                 #
+#                   PUBLIC SUBROUTINES                     #
 ############################################################
 
 # Start a sample counter -- all print statements within this package automatically go to STDERR
 my $random_gibbs_sample_count = 0;
 
+# Samples a random set and prints a score
+sub sample	{
+	my ( $self, $nsamples ) = @_;
+	my @motifs;
+	foreach my $i ( 1 .. $nsamples )	{
+		my $sample = $self->_gibbs_sample();
+		push @motifs, $sample;
+	}
+	my $best_motif =  $self->_max_score( \@motifs );
+	return $best_motif;
+}
+
+# These functions are just aliases of sample() above
+sub gibbs			{	my ( $self, $nsamples ) = @_;  return $self->sample($nsamples); 	}
+sub gibbs_sample	{	my ( $self, $nsamples ) = @_;  return $self->sample($nsamples); 	}
+sub search 			{	my ( $self, $nsamples ) = @_;  return $self->sample($nsamples); 	}
+sub gibbs_search	{	my ( $self, $nsamples ) = @_;  return $self->sample($nsamples); 	}
+sub sample_motif	{	my ( $self, $nsamples ) = @_;  return $self->sample($nsamples); 	}
+sub find_motif		{	my ( $self, $nsamples ) = @_;  return $self->sample($nsamples); 	}
+
+		
+# Simply prints an array with each element on a new line		
+sub print_matrix	{
+	my ( $self, $list ) = @_;
+	print STDERR join("\n", @{$list});
+}
+
+# Show where the motif is in each sequence, but nicely :)
+sub show_motif	{
+	my ( $self, $starting_positions ) = @_;
+	for ( my $i=0; $i < $self->{_t}; $i++ )	{
+		my $sequence = $self->{_seqs}->[$i];
+		my $starting_position = $starting_positions->[$i];
+		my $a = lc ( substr($sequence, 0, $starting_position) );
+		my $b = uc ( substr($sequence, $starting_position, $self->{_motif_len} ) );
+		my $c = lc ( substr($sequence, ($starting_position + $self->{_motif_len})) );
+		print STDERR "$a$b$c\n";
+	}
+}
+
+# Print a given profile to an output file
+sub print_profile	{
+	my ( $self, $filename, $mode ) = @_;
+	my %Profile = %{ $self->{_profiles}->[-1] };
+	
+	# Sanity check
+	$mode = ( $mode && $mode eq ">>" )? ">>" : ">";
+	$filename = ( $filename )? $filename : "--";
+	
+	# Set the output filehandle
+	my $succout = open( OUT, "$mode", "$filename" ) if ( $filename ne "--" );
+	my $fhout;
+	if ( $succout )		{	$fhout = *OUT;		}
+	else				{	$fhout = *STDOUT;	warn "Gibbs::print_profile WARNING: Could not open output file.\n $!\n";	}
+	
+	# Print to filehandle
+	print $fhout "$_\t", join("\t", @{$Profile{$_}}, "\n") foreach ( sort keys %Profile );
+	close $fhout if ( $succout );
+}
+
+############################################################
+#         SANITY-CHECKING PROBABILITY SUBROUTINES          #
+############################################################
+
+# Additional public utility functions to determine the probability that a random, unrelated kmer of size k
+# is present in M of the N sequences of equal length L (and an alphabet of size s), potentially leading us to misleading results.
+#
+# Here, we are making the simplifying assumptions that the frequency distribution of kmers is Poisson,
+# and the distribution of symbols in the alphabet are independent and identical (IID).
+
+# Returns the minimum (suggested) sequence length such that the probability of a kmer of size k occuring in M sequences is less than or equal to a given probability p.
+# This is useful to help determine if the sequences being searched for motifs are reasonably likely to contain random, confounding motifs that are likely to just be "noise". 
+sub minimum_suggested_sequence_length		{
+	my ( $self, $prob, $m, $k ) = @_;
+	
+	# Sanity check incoming parameters
+	$k = ( $k && $k > 0 && $k <= $self->{_n} )? $k : $self->{_motif_len};		# Set $k to the kmer size in the Gibbs object if this parameter is not given
+	$m = ( $m && $m > 0 && $m <= $self->{_t} )? $m : $self->{_t};				# Set $m to the total number of sequences if this parameter is not given
+	$prob = ( $prob && $prob > 0.0 && $prob <= 1.0 )? $prob : 0.01;				# Set $prob to a default value of 0.01
+	
+	# Define some additional parameters for Poisson probability
+	my $s = scalar @{$self->{_alphabet}};
+	my $L = $self->{_n};
+	my $pK = (1 / $s)**$k;				# Probability of any random k-sized kmer using the given alphabet
+	my $lambda = ($L - ($k-1))*$pK;		# Poisson parameter lambda
+	
+	# Compute minimum suggested length at the given probability threshold
+	my $length = ($k-1) - $s**$k * log(1 - $prob**(1/$m));
+	return $length;
+}
+
+# Returns the Poisson probability of identifying a random, non-target kmer of length k from M sequences
+sub random_nontarget_motif_probability		{
+	my ( $self, $m, $k ) = @_;
+	
+	# Sanity check incoming parameters
+	$k = ( $k && $k > 0 && $k <= $self->{_n} )? $k : $self->{_motif_len};		# Set $k to the kmer size in the Gibbs object if this parameter is not given
+	$m = ( $m && $m > 0 && $m <= $self->{_t} )? $m : $self->{_t};				# Set $m to the total number of sequences if this parameter is not given
+	
+	# Define some additional parameters for Poisson probability
+	my $s = scalar @{$self->{_alphabet}};
+	my $L = $self->{_n};
+	my $pK = (1 / $s)**$k;				# Probability of any random k-sized kmer using the given alphabet
+	my $lambda = ($L - ($k-1))*$pK;		# Poisson parameter lambda
+	
+	# Compute Poisson probability of encountering a random motif under the given parameters
+	my $prob = (1 - exp(-$lambda))**$m;		
+	return $prob;
+}
+
+############################################################
+#                   PRIVATE SUBROUTINES                    #
+############################################################
+
 # Returns TRUE (1) if everything in a list has the same length as everything else
-sub all_the_same_length	{
+sub _all_the_same_length	{
 	my ( $self, $list ) = @_;
 	for ( my $i=0; $i < scalar @{$list}; $i++ )	{
 		if ( length $list->[$i] != length $list->[0] )	{
@@ -252,7 +369,7 @@ sub all_the_same_length	{
 }		
 
 # Returns TRUE (1) if everything in a list has the same value as everything else
-sub all_the_same_value	{
+sub _all_the_same_value	{
 	my ( $self, $list ) = @_;
 	foreach my $item ( @{$list} )	{
 		if ( $item != $list->[0] || $item ne $list->[0] )	{
@@ -265,7 +382,7 @@ sub all_the_same_value	{
 
 # Returns TRUE (1) if everything in a list has the same value as everything else
 # This is more of a quick-and-dirty comparison, but it should get the job done well enough.
-sub all_the_same_hashes	{
+sub _all_the_same_hashes	{
 	my ( $self, $list ) = @_;
 	my @ref_keys = sort keys %{ $list->[0] };
 	
@@ -291,7 +408,7 @@ sub all_the_same_hashes	{
 }
 
 # Checks if the most recent *k* profiles have converged
-sub check_convergence	{
+sub _check_convergence	{
 	my ( $self ) = @_;
 	my $k = $self->get_k;
 	my @last_k_profiles = @{$self->{_profiles}};
@@ -299,31 +416,13 @@ sub check_convergence	{
 		return 0;
 	}
 	else	{
-		return $self->all_the_same_hashes( \@last_k_profiles );
+		return $self->_all_the_same_hashes( \@last_k_profiles );
 	}
-}
-
-# Samples a random set and prints a score
-sub sample_random_starting_positions	{
-	my ( $self, $nsamples ) = @_;
-	my @motifs;
-	foreach my $i ( 1 .. $nsamples )	{
-		my $sample = $self->gibbs_sample();
-		push @motifs, $sample;
-	}
-	my $best_motif =  $self->max_score( \@motifs );
-	return $best_motif;
-}
-		
-# Simply prints an array with each element on a new line		
-sub print_matrix	{
-	my ( $self, $list ) = @_;
-	print STDERR join("\n", @{$list});
 }
 
 # Randomly selects starting positions in each string, disallowing any starting positions
 # that would cause the motif substring to overflow the length of the sequence.
-sub get_starting_positions		{
+sub _get_starting_positions		{
 	my ( $self ) = @_;
 	my @start_pos;
 	
@@ -334,7 +433,7 @@ sub get_starting_positions		{
 }
 
 # Generates a normalized profile from the sampled motif matrix
-sub create_profile 		{
+sub _create_profile 		{
 	my ( $self, $matrix ) = @_;
 	my %Profile = ();
 	my $alphabet = $self->{_alphabet};
@@ -366,7 +465,7 @@ sub create_profile 		{
 }		
 
 # Normalizes a list of numerical values		
-sub normalize	{
+sub _normalize	{
 	my ( $self, $dist ) = @_;
 	my $probabilities;
 	my $total = sum @{$dist};	
@@ -377,7 +476,7 @@ sub normalize	{
 }
 
 # Compute the joint probability of sampling a particular profile
-sub get_generation_probability		{
+sub _get_generation_probability		{
 	my ( $self, $lmer, $profile ) = @_;
 	my $prob = 1;		# Initialize to 1 for easy multiplication
 	
@@ -406,8 +505,45 @@ sub get_generation_probability		{
 	return $prob;
 }
 
+# Reads a profile and returns the consensus motif
+sub _get_motif 	{
+	my ( $self, $profile ) = @_;
+	my $alphabet = $self->{_alphabet};
+	my @motif;
+	
+	# Get the most probable letter at each position in the profile
+	for ( my $i=0; $i < $self->{_motif_len}; $i++ )	{
+		my @candidates;
+		foreach my $letter ( @{$alphabet} )		{
+			my @tmp = ( $letter, $profile->{$letter}->[$i] );
+			push @candidates, \@tmp;
+		}
+		push @motif, $self->_max_score( \@candidates )->[0];
+	}
+	# Join the motif array into a string and return
+	return join("", @motif);
+}
+
+# Calculate the score of a given profile
+sub _get_profile_score		{
+	my ( $self, $profile ) = @_;
+	my @list;
+	
+	# The score of the profile is the sum of the most frequent letter in every position in the profile's indices
+	# For each position in the motif, get the column from the profile.
+	# Then take the maximum value of the column and sum it with all the other colMaxes.
+	for (my $i=0; $i < $self->{_motif_len}; $i++ )	{
+		my @col;
+		foreach my $freq ( values %{$profile} )	{
+			push @col, $freq->[$i];
+		}
+		push @list, max @col;
+	}
+	return sum @list;
+}
+
 # Returns the maximum valued tuple from a list of tuples, where the value to maximize is the second element in the tuple.		
-sub max_score	{
+sub _max_score	{
 	my ( $self, $tuples ) = @_;
 	my $max = -10**10;			# Approximate a very low number as the initial max
 	my $tup;
@@ -425,7 +561,7 @@ sub max_score	{
 }		
 
 # This package's way of sampling a normalized distribution		
-sub choose_from_distribution	{
+sub _choose_from_distribution	{
 	my ( $self, $dist ) = @_;
 	my $rand = rand();			# Gets a random value between 0 and 1
 	
@@ -442,119 +578,49 @@ sub choose_from_distribution	{
 	return;
 }		
 
-# Reads a profile and returns the consensus motif
-sub get_motif 	{
-	my ( $self, $profile ) = @_;
-	my $alphabet = $self->{_alphabet};
-	my @motif;
-	
-	# Get the most probable letter at each position in the profile
-	for ( my $i=0; $i < $self->{_motif_len}; $i++ )	{
-		my @candidates;
-		foreach my $letter ( @{$alphabet} )		{
-			my @tmp = ( $letter, $profile->{$letter}->[$i] );
-			push @candidates, \@tmp;
-		}
-		push @motif, $self->max_score( \@candidates )->[0];
-	}
-	# Join the motif array into a string and return
-	return join("", @motif);
-}
-
-# Calculate the score of a given profile
-sub get_profile_score		{
-	my ( $self, $profile ) = @_;
-	my @list;
-	
-	# The score of the profile is the sum of the most frequent letter in every position in the profile's indices
-	# For each position in the motif, get the column from the profile.
-	# Then take the maximum value of the column and sum it with all the other colMaxes.
-	for (my $i=0; $i < $self->{_motif_len}; $i++ )	{
-		my @col;
-		foreach my $freq ( values %{$profile} )	{
-			push @col, $freq->[$i];
-		}
-		push @list, max @col;
-	}
-	return sum @list;
-}
-
-# Show where the motif is in each sequence, but nicely :)
-sub show_motif	{
-	my ( $self, $starting_positions ) = @_;
-	for ( my $i=0; $i < $self->{_t}; $i++ )	{
-		my $sequence = $self->{_DNA}->[$i];
-		my $starting_position = $starting_positions->[$i];
-		my $a = lc ( substr($sequence, 0, $starting_position) );
-		my $b = uc ( substr($sequence, $starting_position, $self->{_motif_len} ) );
-		my $c = lc ( substr($sequence, ($starting_position + $self->{_motif_len})) );
-		print STDERR "$a$b$c\n";
-	}
-}
-
-# Print a given profile to an output file
-sub print_profile	{
-	my ( $self, $profile, $mode, $filename ) = @_;
-	my %Profile = %{ $profile };
-	
-	# Sanity check
-	$mode = ( $mode && $mode eq ">>" )? ">>" : ">";
-	$filename = ( $filename )? $filename : "--";
-	
-	# Set the output filehandle
-	my $succout = open( OUT, "$mode", "$filename" ) if ( $filename ne "--" );
-	my $fhout;
-	if ( $succout )		{	$fhout = *OUT;		}
-	else				{	$fhout = *STDOUT;	warn "Gibbs::print_profile WARNING: Could not open output file.\n $!\n";	}
-	
-	# Print to filehandle
-	print $fhout "$_\t", join("\t", @{$Profile{$_}}, "\n") foreach ( sort keys %Profile );
-	close $fhout if ( $succout );
-}
-
 # Randomly select an element from a list and return both the element and the randomly chosen index
-sub random_choice	{
+sub _random_choice	{
 	my ( $self, $list ) = @_;
 	my $idx = int(rand(scalar @{$list}));
 	return ( $list->[$idx], $idx );
 }
 
-# When an object is no longer being used, garbage collect it and adjust count of existing objects
-sub DESTROY	{
-	my ( $self ) = @_;
-	$self->_decr_count();
-}
-
 ####################################
-# The actual sampling function
-
-sub gibbs_sample 		{
-	my ( $self ) = @_;
+# The actual Gibbs sampling function
+sub _gibbs_sample 		{
+	my ( $self, $motif_k ) = @_;
 	$random_gibbs_sample_count++;
 	
+	# Extra quality-of-life addition:
+	# If $motif_k is passed as an argument, update this parameter in the object.
+	if ( $motif_k && int($motif_k) == $motif_k && $motif_k > 0 && $motif_k < $self->{_n} )	{
+		$self->{_motif_len} = $motif_k;
+	}
+	
+	
 	# Get starting positions and reset our lists of samples and profiles
-	my $starting_positions = $self->get_starting_positions;
+	my $starting_positions = $self->_get_starting_positions;
 	$self->{_samples} = [ ];
 	$self->{_profiles} = [ ];
 
 	my $c = 0;
-	while ( $self->check_convergence != 1 )		{
+	while ( $self->_check_convergence != 1 )		{
 		# Generate new lmers that come from starting positions
 		my $tuples;
-		my $DNA = $self->{_DNA};		
+		my $DNA = $self->{_seqs};		
 		for ( my $i=0; $i < $self->{_t}; $i++ )	{
-			my $sub = substr( $self->{_DNA}->[$i], $starting_positions->[$i], $self->{_motif_len} );
+			my $sub = substr( $self->{_seqs}->[$i], $starting_positions->[$i], $self->{_motif_len} );
 			my @submotif = split('', $sub);
 			push @{$tuples}, \@submotif;
 		}
 		
 		# Choose a sequence from the DNA sequences randomly,
 		# then remove it
-		my ( $sequence, $index ) = $self->random_choice( $self->{_DNA} );
-		splice( @{$self->{_DNA}}, $index, 1);		# Careful here, make sure that we are assigning the spliced list correctly to $self->DNA
+		my ( $sequence, $index ) = $self->_random_choice( $self->{_seqs} );
+		splice( @{$self->{_seqs}}, $index, 1);		# Careful here, make sure that we are assigning the spliced list correctly to $self->DNA
 		
 		# Make a new profile from the starting positions and save it for convergence checking
-		my %Profile = %{ $self->create_profile( $tuples ) };
+		my %Profile = %{ $self->_create_profile( $tuples ) };
 		push @{$self->{_profiles}}, \%Profile;
 	
 		# If saving this profile overflows the profile buffer, then get rid of the odlest profile in it
@@ -577,19 +643,19 @@ sub gibbs_sample 		{
 		for ( my $i=0; $i < ($self->{_n}-$self->{_motif_len}); $i++ )					{
 			my $lmer = substr($sequence, $i, $self->{_motif_len});
 			my @lmer = split('', $lmer);
-			my $prob = $self->get_generation_probability( \@lmer, \%Profile );
+			my $prob = $self->_get_generation_probability( \@lmer, \%Profile );
 			push @{$probs_ref}, $prob;
 		}
-		my $probs = $self->normalize( $probs_ref );
+		my $probs = $self->_normalize( $probs_ref );
 		
 		# Get a new starting index, then put the sequence we spliced out earlier back where it belongs
-		my $new_starting_index = $self->choose_from_distribution( $probs );
+		my $new_starting_index = $self->_choose_from_distribution( $probs );
 		$starting_positions->[$index] = $new_starting_index;
-		splice( @{$self->{_DNA}}, $index, 0, $sequence );
+		splice( @{$self->{_seqs}}, $index, 0, $sequence );
 		
 		# Get the consensus motif and profile score
-		my $motif = $self->get_motif( \%Profile );
-		my $score = $self->get_profile_score( \%Profile );
+		my $motif = $self->_get_motif( \%Profile );
+		my $score = $self->_get_profile_score( \%Profile );
 		
 		# Add the motif and score to $self->{_samples}
 		my @tmp = ( $motif, $score );
@@ -599,9 +665,10 @@ sub gibbs_sample 		{
 	}
 	
     # Of all the samples we took, choose the best one. 	# Hopefully it's the one we converged to, but may not be...
-	my $best_motif = $self->max_score( $self->{_samples} );
+	my $best_motif = $self->_max_score( $self->{_samples} );
 	return $best_motif;		# $best_motif is actually a tuple array of ( STR motif and FLOAT score ), we only want to return the STR motif.
 }
+
 
 
 # Last line in the class must always be 1!
