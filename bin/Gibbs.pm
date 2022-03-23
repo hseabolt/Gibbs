@@ -299,7 +299,7 @@ sub print_profile	{
 	my $succout = open( OUT, "$mode", "$filename" ) if ( $filename ne "--" );
 	my $fhout;
 	if ( $succout )		{	$fhout = *OUT;		}
-	else				{	$fhout = *STDOUT;	warn "Gibbs::print_profile WARNING: Could not open output file.\n $!\n";	}
+	else				{	$fhout = *STDOUT;	}
 	
 	# Print to filehandle
 	print $fhout "$_\t", join("\t", @{$Profile{$_}}, "\n") foreach ( sort keys %Profile );
@@ -319,41 +319,37 @@ sub print_profile	{
 # Returns the minimum (suggested) sequence length such that the probability of a kmer of size k occuring in M sequences is less than or equal to a given probability p.
 # This is useful to help determine if the sequences being searched for motifs are reasonably likely to contain random, confounding motifs that are likely to just be "noise". 
 sub minimum_suggested_sequence_length		{
-	my ( $self, $prob, $m, $k ) = @_;
+	my ( $self, $prob, $m, $k, $s ) = @_;
 	
 	# Sanity check incoming parameters
-	$k = ( $k && $k > 0 && $k <= $self->{_n} )? $k : $self->{_motif_len};		# Set $k to the kmer size in the Gibbs object if this parameter is not given
-	$m = ( $m && $m > 0 && $m <= $self->{_t} )? $m : $self->{_t};				# Set $m to the total number of sequences if this parameter is not given
+	$k = ( $k && $k > 0 )? $k : $self->{_motif_len};		# Set $k to the kmer size in the Gibbs object if this parameter is not given
+	$m = ( $m && $m > 0 )? $m : $self->{_t};				# Set $m to the total number of sequences if this parameter is not given
+	$s = ( $s && $s > 0 )? $s : scalar @{$self->{_alphabet}};
 	$prob = ( $prob && $prob > 0.0 && $prob <= 1.0 )? $prob : 0.01;				# Set $prob to a default value of 0.01
-	
-	# Define some additional parameters for Poisson probability
-	my $s = scalar @{$self->{_alphabet}};
-	my $L = $self->{_n};
 	my $pK = (1 / $s)**$k;				# Probability of any random k-sized kmer using the given alphabet
-	my $lambda = ($L - ($k-1))*$pK;		# Poisson parameter lambda
 	
 	# Compute minimum suggested length at the given probability threshold
 	my $length = ($k-1) - $s**$k * log(1 - $prob**(1/$m));
-	return $length;
+	return int $length;
 }
 
 # Returns the Poisson probability of identifying a random, non-target kmer of length k from M sequences
-sub random_nontarget_motif_probability		{
-	my ( $self, $m, $k ) = @_;
+sub nontarget_motif_probability		{
+	my ( $self, $m, $k, $L, $s ) = @_;
 	
 	# Sanity check incoming parameters
 	$k = ( $k && $k > 0 && $k <= $self->{_n} )? $k : $self->{_motif_len};		# Set $k to the kmer size in the Gibbs object if this parameter is not given
 	$m = ( $m && $m > 0 && $m <= $self->{_t} )? $m : $self->{_t};				# Set $m to the total number of sequences if this parameter is not given
+	$s = ( $s && $s > 0 )? $s : scalar @{$self->{_alphabet}};
+	$L = ( $L && $L > 0 )? $L : $self->{_n};
 	
 	# Define some additional parameters for Poisson probability
-	my $s = scalar @{$self->{_alphabet}};
-	my $L = $self->{_n};
 	my $pK = (1 / $s)**$k;				# Probability of any random k-sized kmer using the given alphabet
 	my $lambda = ($L - ($k-1))*$pK;		# Poisson parameter lambda
 	
 	# Compute Poisson probability of encountering a random motif under the given parameters
 	my $prob = (1 - exp(-$lambda))**$m;		
-	return $prob;
+	return sprintf("%3.4f", $prob);
 }
 
 ############################################################

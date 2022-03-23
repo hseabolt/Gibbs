@@ -1,6 +1,6 @@
-# Gibbs -- a Motif Discovery Technique using Markov Chain Monte Carlo (MCMC) Sampling
+# Gibbs -- a Package for Sequence Motif Discovery using Markov Chain Monte Carlo (MCMC) Sampling
 
-**Author**: MH Seabolt (@hseabolt)
+**Author**: MH Seabolt (Github: @hseabolt)
 
 This package creates a Perl object class representing a Gibbs sampler tailored for MCMC sampling of "mutually similar" motifs from string data.
 While written with biological sequences in mind, this package is also suitable for motif-finding from generic strings using any alphabet.

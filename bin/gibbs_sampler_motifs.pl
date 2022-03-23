@@ -95,7 +95,7 @@ if ( $help    )     { die usage();											}
 
 # Sanity check the other user-defined parameters
 $k = ( $k && int($k) >= 2 )? $k : 3;
-$motif_len = ( $motif_len && int($motif_len) >= 5 )? $motif_len : 5;
+$motif_len = ( $motif_len && int($motif_len) >= 5 )? $motif_len : 7;
 $nsamples = ( $nsamples && int($nsamples) >= 1 )? $nsamples : 100;
 
 # Parse the given FASTA sequences into an array
@@ -107,13 +107,26 @@ my $Sampler = Gibbs->new( seqs => $DNA, k => $k, motif_len => $motif_len );
 
 # Use our Gibbs object to run the MCMC sampling procedure.
 # The returned value is a tuple with the motif sequence and its score.
-my ( $best_motif, $score ) = $Sampler->sample( $nsamples );
-print STDERR "\n\nBest motif found: $best_motif       Score: $score  \n";
+my $best_motif = $Sampler->sample( $nsamples );
+my ( $motif, $score ) = @{ $best_motif };
+print STDOUT "\n\nBest motif found: $motif       Score: $score  \n";
 
 # Print the converged profile out if we have an output file specified, otherwise just print to STDOUT
 if ( $output ne "--" )	{	$Sampler->print_profile( $output, ">" );		}
 else 					{	$Sampler->print_profile();						}		# Prints to STDOUT
 
+
+# The arguments here are given to generalize the computation using any size data, but will default to the specifics of the $Sampler object if params are omitted.
+# Here we are determining the minimum length the sequences should be if we want to reasonably rule out the likelihood that a random, unrelated 6-mer 
+# occurs in a total of 400 sequences by random chance (using a standard ATCG alhpabet for DNA).  Our threshold for "reasonable likelihood" is 99% surety (aka p <= 0.01)
+# Order of arguments here is ( probability threshold, number of sequences, motif length, alphabet size )
+my $min_sequence_length = $Sampler->minimum_suggested_sequence_length( 0.01, 400, 6, 4 );
+print STDOUT "Minimum suggested sequence length: $min_sequence_length\n";
+
+# Determine the probability of a random 6-mer occuring in all 400 DNA sequences if we know all the other parameters.
+# This is essentially the inverse of the above problem -- here we know the details of the sequences, but want to determine the likelihood of "noisy" results
+my $reasonable_likelihood = $Sampler->nontarget_motif_probability(400, 6, 18314, 4);
+print STDOUT "Likelihood of a random 6-mer appearing in all 400 DNA sequences of length 18314 bp: $reasonable_likelihood\n";
 
 exit;
 
